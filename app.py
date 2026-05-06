@@ -6,25 +6,21 @@ import yfinance as yf
 from ta.trend import EMAIndicator, ADXIndicator
 from ta.momentum import StochasticOscillator
 
-st.set_page_config(page_title="Scanner FII Institucional", layout="wide")
-st.title("🏢 Scanner Institucional FIIs (Pullback + Probabilidade 2%)")
+# =========================
+# CONFIG
+# =========================
+st.set_page_config(page_title="Scanner FIIs Profissional", layout="wide")
+st.title("🏢 Scanner FIIs - Pullback + Probabilidade (2%)")
 
 # =========================
-# LISTA AMPLIADA (TIJOLO)
+# LISTA AMPLA (TIJOLO)
 # =========================
 fiis = [
-# Logística
 "HGLG11","BTLG11","XPLG11","BRCO11","VILG11","RBRL11","GARE11","GGRC11",
-"SDIL11","PATL11","HLOG11","ALZR11","LGCP11",
-
-# Shoppings
+"SDIL11","PATL11","HLOG11","ALZR11","LGCP11","BLMG11",
 "XPML11","HGBS11","VISC11","HSML11","MALL11","ABCP11","FIGS11",
-
-# Lajes
 "PVBI11","HGRE11","JSRE11","BRCR11","VINO11",
-
-# Híbridos com tijolo forte
-"KNRI11","HGRU11"
+"KNRI11","HGRU11","TRXF11","VILG11","LVBI11"
 ]
 
 tickers = [x + ".SA" for x in fiis]
@@ -77,11 +73,10 @@ def add_indicators(df):
     return df.dropna()
 
 # =========================
-# CONFIRMAÇÃO SEMANAL
+# SEMANAL
 # =========================
 def weekly_confirmation(ticker):
     df = get_data(ticker, "2y")
-
     if df is None:
         return False
 
@@ -105,38 +100,33 @@ def weekly_confirmation(ticker):
 def falso_rompimento(df):
     if len(df) < 2:
         return True
-
     last = df.iloc[-1]
     prev = df.iloc[-2]
-
     return last["High"] > prev["High"] and last["Close"] < prev["High"]
 
 # =========================
-# PROBABILIDADE +2%
+# PROBABILIDADE 2%
 # =========================
 def probabilidade_2(df):
-
     ganhos = 0
     total = 0
 
     for i in range(len(df)-10):
         entrada = df["Close"].iloc[i]
-        alvo = entrada * 1.02  # 🔥 AJUSTADO PRA 2%
-
+        alvo = entrada * 1.02
         janela = df["High"].iloc[i:i+10]
 
         if len(janela) < 10:
             continue
 
         total += 1
-
         if janela.max() >= alvo:
             ganhos += 1
 
     if total == 0:
         return 0
 
-    return round((ganhos / total) * 100, 1)
+    return round((ganhos/total)*100,1)
 
 # =========================
 # STATUS
@@ -155,10 +145,12 @@ def status_ativo(trend, trigger):
 results = []
 progress = st.progress(0)
 
-for i, ticker in enumerate(tickers):
+max_assets = st.sidebar.slider("Qtd de FIIs", 5, len(tickers), 20)
+selected = tickers[:max_assets]
+
+for i, ticker in enumerate(selected):
 
     df = get_data(ticker)
-
     if df is None:
         continue
 
@@ -171,7 +163,6 @@ for i, ticker in enumerate(tickers):
         continue
 
     df = add_indicators(df)
-
     if df is None or df.empty:
         continue
 
@@ -180,7 +171,6 @@ for i, ticker in enumerate(tickers):
     trend = last["Close"] > last["ema69"]
     dmi_ok = last["di_plus"] > last["di_minus"]
     trigger = last["k"] > last["d"]
-
     semanal = weekly_confirmation(ticker)
 
     if falso_rompimento(df):
@@ -204,7 +194,7 @@ for i, ticker in enumerate(tickers):
         "Status": status_ativo(trend, trigger)
     })
 
-    progress.progress((i+1)/len(tickers))
+    progress.progress((i+1)/len(selected))
 
 df_res = pd.DataFrame(results)
 
@@ -215,17 +205,43 @@ if not df_res.empty:
 
     df_res = df_res.sort_values(by=["Score","Prob +2%"], ascending=False)
 
-    st.subheader("🏆 Ranking Institucional")
-    st.dataframe(df_res, use_container_width=True)
+    def classificar(row):
+        if row["Score"] >= 75 and row["Status"] == "Setup Ativo":
+            return "ENTRADA"
+        elif row["Score"] >= 50:
+            return "OBSERVAR"
+        else:
+            return "DESCARTAR"
 
-    st.subheader("🔥 Entradas Premium")
+    df_res["Classificação"] = df_res.apply(classificar, axis=1)
 
-    entradas = df_res[
-        (df_res["Score"] >= 75) &
-        (df_res["Status"] == "Setup Ativo")
-    ]
+    def color_row(row):
+        if row["Classificação"] == "ENTRADA":
+            return ['background-color: #d4edda'] * len(row)
+        elif row["Classificação"] == "OBSERVAR":
+            return ['background-color: #fff3cd'] * len(row)
+        else:
+            return ['background-color: #f8d7da'] * len(row)
 
-    st.dataframe(entradas, use_container_width=True)
+    entradas = df_res[df_res["Classificação"] == "ENTRADA"]
+
+    if not entradas.empty:
+        st.success("🚨 OPORTUNIDADE ENCONTRADA!")
+
+        st.subheader("🔥 TOP 3 ENTRADAS")
+        st.dataframe(
+            entradas.head(3).style.apply(color_row, axis=1),
+            use_container_width=True
+        )
+    else:
+        st.info("Nenhuma oportunidade clara.")
+
+    st.subheader("📊 VISÃO GERAL")
+
+    st.dataframe(
+        df_res.style.apply(color_row, axis=1),
+        use_container_width=True
+    )
 
 else:
     st.warning("Nenhum ativo encontrado.")
