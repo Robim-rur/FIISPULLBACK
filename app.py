@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import yfinance as yf
 
 from ta.trend import EMAIndicator, ADXIndicator
@@ -8,11 +9,11 @@ from ta.momentum import StochasticOscillator
 # =========================
 # CONFIG
 # =========================
-st.set_page_config(page_title="Scanner FIIs Premium", layout="wide")
-st.title("🏢 Scanner FIIs - Tijolo + Fundamentos")
+st.set_page_config(page_title="Scanner FIIs Blindado", layout="wide")
+st.title("🏢 Scanner FIIs - Versão Blindada")
 
 # =========================
-# LISTA (SUA)
+# LISTA
 # =========================
 fiis = [
 "HGLG11","BTLG11","XPLG11","BRCO11","VILG11","RBRL11","GARE11","GGRC11","ALZR11",
@@ -23,7 +24,7 @@ fiis = [
 tickers = [x + ".SA" for x in fiis]
 
 # =========================
-# FUNDAMENTOS (SIMULADO / EDITÁVEL)
+# FUNDAMENTOS (SEGUROS)
 # =========================
 fundamentos = {
 "HGLG11": {"pvp":0.98, "vac":0.03, "cap":0.09},
@@ -41,17 +42,41 @@ fundamentos = {
 }
 
 # =========================
-# DATA
+# DATA NORMALIZADA
 # =========================
 @st.cache_data(ttl=3600)
 def get_data(ticker):
     try:
         df = yf.download(ticker, period="1y", progress=False)
-        if df.empty:
+
+        if df is None or df.empty:
             return None
+
+        # flatten colunas
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+
         df = df[["Open","High","Low","Close","Volume"]]
+
+        # forçar tipo numérico
+        df = df.apply(pd.to_numeric, errors='coerce')
+
         df.dropna(inplace=True)
+
+        if len(df) < 100:
+            return None
+
         return df
+
+    except:
+        return None
+
+# =========================
+# FUNÇÃO SEGURA PARA PEGAR VALOR
+# =========================
+def safe_last(series):
+    try:
+        return float(series.iloc[-1])
     except:
         return None
 
@@ -59,33 +84,47 @@ def get_data(ticker):
 # FILTRO FUNDAMENTAL
 # =========================
 def filtro_fundamental(ticker):
-    t = ticker.replace(".SA","")
+    try:
+        t = ticker.replace(".SA","")
 
-    if t not in fundamentos:
+        if t not in fundamentos:
+            return False
+
+        f = fundamentos[t]
+
+        return (
+            f["pvp"] < 1.05 and
+            f["vac"] < 0.06 and
+            f["cap"] > 0.08
+        )
+    except:
         return False
 
-    f = fundamentos[t]
-
-    return (
-        f["pvp"] < 1.05 and
-        f["vac"] < 0.06 and
-        f["cap"] > 0.08
-    )
-
 # =========================
-# INDICADORES
+# INDICADORES SEGUROS
 # =========================
 def add_indicators(df):
-    df["ema69"] = EMAIndicator(df["Close"], 69).ema_indicator()
 
-    stoch = StochasticOscillator(df["High"], df["Low"], df["Close"], 14, 3)
-    df["k"] = stoch.stoch()
-    df["d"] = stoch.stoch_signal()
+    try:
+        close = pd.Series(df["Close"].values.flatten(), index=df.index)
+        high = pd.Series(df["High"].values.flatten(), index=df.index)
+        low = pd.Series(df["Low"].values.flatten(), index=df.index)
 
-    adx = ADXIndicator(df["High"], df["Low"], df["Close"], 14)
-    df["adx"] = adx.adx()
+        df["ema69"] = EMAIndicator(close, 69).ema_indicator()
 
-    return df
+        stoch = StochasticOscillator(high, low, close, 14, 3)
+        df["k"] = stoch.stoch()
+        df["d"] = stoch.stoch_signal()
+
+        adx = ADXIndicator(high, low, close, 14)
+        df["adx"] = adx.adx()
+
+        df.dropna(inplace=True)
+
+        return df
+
+    except:
+        return None
 
 # =========================
 # SCANNER
@@ -93,40 +132,63 @@ def add_indicators(df):
 results = []
 progress = st.progress(0)
 
-for i, ticker in enumerate(tickers):
+max_assets = st.sidebar.slider("Qtd de ativos", 5, len(tickers), 15)
 
-    # FILTRO FUNDAMENTAL PRIMEIRO
-    if not filtro_fundamental(ticker):
-        progress.progress((i+1)/len(tickers))
+selected = tickers[:max_assets]
+
+for i, ticker in enumerate(selected):
+
+    try:
+        # FUNDAMENTO PRIMEIRO
+        if not filtro_fundamental(ticker):
+            progress.progress((i+1)/len(selected))
+            continue
+
+        df = get_data(ticker)
+
+        if df is None:
+            continue
+
+        vol = safe_last(df["Volume"])
+        if vol is None or vol < 200000:
+            continue
+
+        df = add_indicators(df)
+
+        if df is None or df.empty:
+            continue
+
+        last = df.iloc[-1]
+
+        close = safe_last(df["Close"])
+        ema = safe_last(df["ema69"])
+        adx = safe_last(df["adx"])
+        k = safe_last(df["k"])
+        d = safe_last(df["d"])
+
+        if None in [close, ema, adx, k, d]:
+            continue
+
+        score = 0
+        if close > ema: score += 30
+        if adx > 15: score += 30
+        if k > d: score += 40
+
+        t = ticker.replace(".SA","")
+
+        results.append({
+            "Ticker": t,
+            "Preço": round(close,2),
+            "Score": score,
+            "P/VP": fundamentos.get(t, {}).get("pvp", None),
+            "Vacância": fundamentos.get(t, {}).get("vac", None),
+            "Cap Rate": fundamentos.get(t, {}).get("cap", None)
+        })
+
+    except:
         continue
 
-    df = get_data(ticker)
-
-    if df is None or len(df) < 100:
-        continue
-
-    # liquidez
-    if df["Volume"].iloc[-1] < 200000:
-        continue
-
-    df = add_indicators(df)
-    last = df.iloc[-1]
-
-    score = 0
-    if last["Close"] > last["ema69"]: score += 30
-    if last["adx"] > 15: score += 30
-    if last["k"] > last["d"]: score += 40
-
-    results.append({
-        "Ticker": ticker.replace(".SA",""),
-        "Preço": round(last["Close"],2),
-        "Score": score,
-        "P/VP": fundamentos[ticker.replace(".SA","")]["pvp"],
-        "Vacância": fundamentos[ticker.replace(".SA","")]["vac"],
-        "Cap Rate": fundamentos[ticker.replace(".SA","")]["cap"]
-    })
-
-    progress.progress((i+1)/len(tickers))
+    progress.progress((i+1)/len(selected))
 
 df_res = pd.DataFrame(results)
 
@@ -136,8 +198,8 @@ df_res = pd.DataFrame(results)
 if not df_res.empty:
     df_res = df_res.sort_values(by="Score", ascending=False)
 
-    st.subheader("🏆 Ranking Premium")
+    st.subheader("🏆 Ranking Blindado")
     st.dataframe(df_res, use_container_width=True)
 
 else:
-    st.warning("Nenhum FII passou nos filtros.")
+    st.warning("Nenhum ativo passou nos filtros.")
