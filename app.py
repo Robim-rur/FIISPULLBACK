@@ -22,9 +22,6 @@ setores = {
 "Híbridos": ["KNRI11","HGRU11","TRXF11","ALZR11"]
 }
 
-# =========================
-# LISTA FINAL
-# =========================
 fiis = sorted(set(sum(setores.values(), [])))
 tickers = [x + ".SA" for x in fiis]
 
@@ -133,9 +130,8 @@ def probabilidade(df):
 # SCANNER
 # =========================
 results = []
-progress = st.progress(0)
 
-for i, ticker in enumerate(tickers):
+for ticker in tickers:
 
     df = get_data(ticker)
     if df is None:
@@ -156,12 +152,10 @@ for i, ticker in enumerate(tickers):
     dmi_ok = last["di_plus"] > last["di_minus"]
     trigger = last["k"] > last["d"]
     semanal = weekly_confirmation(ticker)
-
     falso = falso_rompimento(df)
 
     prob = probabilidade(df)
 
-    # SCORE COMPLETO (SEM EXCLUSÃO)
     score = 0
     if trend: score += 25
     if dmi_ok: score += 25
@@ -174,80 +168,67 @@ for i, ticker in enumerate(tickers):
         "Ticker": ticker.replace(".SA",""),
         "Setor": get_setor(ticker),
         "Preço": round(last["Close"],2),
-        "Volume": int(volume),
-        "Prob +1.5%": prob,
-        "Score": score
+        "Score": score,
+        "Prob": prob
     })
-
-    progress.progress((i+1)/len(tickers))
 
 df_res = pd.DataFrame(results)
 
 # =========================
 # OUTPUT
 # =========================
-if not df_res.empty:
-
-    df_res = df_res.sort_values(by=["Score","Prob +1.5%"], ascending=False)
-
-    def classificar(score):
-        if score >= 70:
-            return "ENTRADA"
-        elif score >= 40:
-            return "OBSERVAR"
-        else:
-            return "DESCARTAR"
-
-    df_res["Classificação"] = df_res["Score"].apply(classificar)
-
-    # =========================
-    # HEATMAP
-    # =========================
-    def heatmap(val):
-        if val >= 70:
-            return "background-color: #00cc66"
-        elif val >= 40:
-            return "background-color: #ffcc00"
-        else:
-            return "background-color: #ff4d4d"
-
-    st.subheader("🔥 Heatmap Geral")
-
-    st.dataframe(
-        df_res.style.applymap(heatmap, subset=["Score"]),
-        use_container_width=True
-    )
-
-    # =========================
-    # MELHOR POR SETOR
-    # =========================
-    st.subheader("🏆 Melhor por Setor")
-
-    top_setor = df_res.groupby("Setor").head(1)
-    st.dataframe(top_setor, use_container_width=True)
-
-    # =========================
-    # RANKING POR SETOR
-    # =========================
-    st.subheader("📊 Ranking por Setor")
-
-    for setor in df_res["Setor"].unique():
-        st.markdown(f"### {setor}")
-        st.dataframe(
-            df_res[df_res["Setor"] == setor],
-            use_container_width=True
-        )
-
-    # =========================
-    # ALERTA
-    # =========================
-    entradas = df_res[df_res["Classificação"] == "ENTRADA"]
-
-    if not entradas.empty:
-        st.success("🚨 OPORTUNIDADES ENCONTRADAS")
-        st.dataframe(entradas.head(3), use_container_width=True)
-    else:
-        st.info("Nenhuma entrada clara no momento.")
-
-else:
+if df_res.empty:
     st.warning("Nenhum ativo encontrado.")
+    st.stop()
+
+df_res = df_res.sort_values(by="Score", ascending=False)
+
+# =========================
+# HEATMAP GRÁFICO
+# =========================
+st.subheader("🔥 Heatmap Visual (Score)")
+
+for _, row in df_res.head(15).iterrows():
+
+    score = row["Score"]
+
+    if score >= 70:
+        color = "#00cc66"
+    elif score >= 40:
+        color = "#ffcc00"
+    else:
+        color = "#ff4d4d"
+
+    st.markdown(f"""
+    **{row['Ticker']} ({row['Setor']})**
+    <div style="background-color:#eee; border-radius:5px;">
+        <div style="
+            width:{score}%;
+            background-color:{color};
+            padding:6px;
+            border-radius:5px;
+            text-align:right;
+            color:black;">
+            {score}
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# =========================
+# MELHOR POR SETOR
+# =========================
+st.subheader("🏆 Melhor por Setor")
+
+top_setor = df_res.groupby("Setor").head(1)
+st.dataframe(top_setor, use_container_width=True)
+
+# =========================
+# ALERTA
+# =========================
+entradas = df_res[df_res["Score"] >= 70]
+
+if not entradas.empty:
+    st.success("🚨 OPORTUNIDADES ENCONTRADAS")
+    st.dataframe(entradas.head(3), use_container_width=True)
+else:
+    st.info("Nenhuma entrada clara.")
